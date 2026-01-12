@@ -348,6 +348,27 @@
         .particle:nth-child(1) { top: 20%; left: 10%; animation-delay: 0s; }
         .particle:nth-child(2) { top: 40%; left: 80%; animation-delay: 2s; }
         .particle:nth-child(3) { top: 70%; left: 30%; animation-delay: 4s; }
+
+        /* Debug info */
+        .debug-info {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            font-size: 11px;
+            color: #666;
+            display: none;
+        }
+
+        .debug-info.show {
+            display: block;
+        }
+
+        .debug-info pre {
+            color: #888;
+            margin: 5px 0;
+            overflow-x: auto;
+        }
     </style>
 </head>
 <body>
@@ -394,6 +415,12 @@
         </form>
 
         <div id="resultado"></div>
+        
+        <!-- Info de Debug (pressione Ctrl+Shift+D para mostrar) -->
+        <div id="debugInfo" class="debug-info">
+            <strong>🔍 Debug Info:</strong>
+            <pre id="debugLog"></pre>
+        </div>
     </div>
 
     <script>
@@ -401,11 +428,38 @@
         const btnSubmit = document.getElementById('btnSubmit');
         const btnText = document.getElementById('btnText');
         const resultado = document.getElementById('resultado');
+        const debugInfo = document.getElementById('debugInfo');
+        const debugLog = document.getElementById('debugLog');
 
+        // ✅ WEBHOOK URL - URL do seu n8n
         const WEBHOOK_URL = 'https://hebertmatheus.app.n8n.cloud/webhook/formulario-notion';
+
+        // Função de log para debug
+        function log(message, data = null) {
+            const timestamp = new Date().toLocaleTimeString();
+            let logMessage = `[${timestamp}] ${message}`;
+            if (data) {
+                logMessage += '\n' + JSON.stringify(data, null, 2);
+            }
+            console.log(logMessage);
+            debugLog.textContent += logMessage + '\n\n';
+        }
+
+        // Atalho para mostrar debug (Ctrl+Shift+D)
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+                debugInfo.classList.toggle('show');
+                if (debugInfo.classList.contains('show')) {
+                    debugLog.textContent = 'Debug ativado!\n\n';
+                }
+            }
+        });
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
+            
+            // Limpa debug log
+            debugLog.textContent = '';
             
             btnSubmit.disabled = true;
             btnText.innerHTML = '<span class="loading"></span> Enviando...';
@@ -414,16 +468,33 @@
             const formData = new FormData(form);
             const data = Object.fromEntries(formData);
             
+            log('📤 Iniciando envio', data);
+            log('🔗 URL do Webhook', { url: WEBHOOK_URL });
+            
             try {
+                log('⏳ Fazendo requisição fetch...');
+                
                 const response = await fetch(WEBHOOK_URL, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify(data)
+                    body: JSON.stringify(data),
+                    mode: 'cors'
                 });
                 
+                log('📥 Resposta recebida', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    ok: response.ok
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const result = await response.json();
+                log('✅ Dados parseados', result);
                 
                 if (result.sucesso) {
                     if (result.tipo === 'usuario_existente') {
@@ -434,6 +505,7 @@
                                 <small style="opacity: 0.8">Tel: ${result.telefone}</small>
                             </div>
                         `;
+                        log('ℹ️ Usuário existente detectado');
                     } else {
                         resultado.innerHTML = `
                             <div class="mensagem sucesso">
@@ -442,6 +514,7 @@
                             </div>
                         `;
                         form.reset();
+                        log('✨ Novo usuário cadastrado com sucesso');
                     }
                 } else {
                     resultado.innerHTML = `
@@ -450,22 +523,49 @@
                             ${result.mensagem || 'Não foi possível processar seu cadastro.'}
                         </div>
                     `;
+                    log('⚠️ Resposta com sucesso=false', result);
                 }
             } catch (error) {
-                console.error('Erro:', error);
+                log('❌ ERRO CAPTURADO', {
+                    message: error.message,
+                    stack: error.stack
+                });
+                
+                let errorMessage = 'Erro ao conectar com o servidor.';
+                let errorDetails = '';
+                
+                if (error.message.includes('Failed to fetch')) {
+                    errorMessage = 'Não foi possível conectar ao servidor.';
+                    errorDetails = 'Verifique se o workflow está ativo no n8n e se o webhook aceita requisições POST.';
+                } else if (error.message.includes('CORS')) {
+                    errorMessage = 'Erro de CORS detectado.';
+                    errorDetails = 'Configure os headers CORS no webhook do n8n.';
+                } else if (error.message.includes('404')) {
+                    errorMessage = 'Webhook não encontrado (404).';
+                    errorDetails = 'Verifique se a URL do webhook está correta.';
+                } else if (error.message.includes('500')) {
+                    errorMessage = 'Erro no servidor (500).';
+                    errorDetails = 'Verifique o workflow no n8n e os logs de execução.';
+                }
+                
                 resultado.innerHTML = `
                     <div class="mensagem erro">
-                        <strong>❌ Erro de conexão</strong><br>
-                        Verifique sua internet e tente novamente.
+                        <strong>❌ ${errorMessage}</strong><br>
+                        ${errorDetails}<br>
+                        <small style="opacity: 0.7; margin-top: 10px; display: block;">
+                            Detalhes técnicos: ${error.message}<br>
+                            Pressione Ctrl+Shift+D para ver logs detalhados.
+                        </small>
                     </div>
                 `;
             } finally {
                 btnSubmit.disabled = false;
                 btnText.textContent = 'Iniciar Jornada';
+                log('🏁 Processo finalizado');
             }
         });
 
-        // Formatação de telefone
+        // Formatação automática de telefone
         document.getElementById('telefone').addEventListener('input', function(e) {
             let value = e.target.value.replace(/\D/g, '');
             if (value.length <= 11) {
@@ -474,6 +574,10 @@
             }
             e.target.value = value;
         });
+
+        // Log inicial
+        log('🚀 Formulário M85 Performance carregado');
+        log('📍 Webhook configurado', { url: WEBHOOK_URL });
     </script>
 </body>
 </html>
